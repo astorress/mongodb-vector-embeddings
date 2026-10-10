@@ -17,7 +17,7 @@
 - El cliente **solo habla con `mongod`**, que reenvía a `mongot` las etapas `$vectorSearch`, `$search`
   y `$searchMeta`.
 
-En este proyecto los dos procesos corren **dentro del mismo contenedor**, `VectorEmbeddingsDatabase`
+En este proyecto los dos procesos corren **dentro del mismo contenedor**, `MongoVectorSearch`
 (imagen oficial `mongodb/mongodb-atlas-local`), así que desde fuera es una sola base de datos.
 
 `mongot` lee los cambios de `mongod` con *change streams*, que solo existen sobre el *oplog* de un
@@ -26,7 +26,7 @@ con el nombre del *hostname* del contenedor (`mongodb`, fijado en el compose par
 sobrevivan si se recrea el contenedor). Sigue siendo una única base de datos, solo que con oplog.
 
 Consecuencia práctica: después de insertar, el índice tarda un momento en reflejar los cambios
-(consistencia eventual). Por eso `rag/indexes.py` espera a que el índice esté `queryable`.
+(consistencia eventual). Por eso `lab/search.py` (`wait_until_queryable`) espera a que el índice esté `queryable`.
 
 ## El índice vectorial
 
@@ -77,4 +77,4 @@ con BM25.
 | `collection.update_search_index(name, definition)` | `db.chunks.updateSearchIndex(name, definition)` |
 | `collection.drop_search_index(name)` | `db.chunks.dropSearchIndex(name)` |
 
-Revisa el estado con `mongosh "$MONGODB_URI" --file mongosh/02-indices.js`.
+Revisa el estado y el ciclo de vida de un índice con `python lessons/03_search_indexes.py`.

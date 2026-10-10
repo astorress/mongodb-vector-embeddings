@@ -1,20 +1,20 @@
 # 2. Ingesta: del libro a documentos con vectores
 
-`python -m rag.ingest` hace todo el recorrido:
+`python lessons/00_seed.py` hace todo el recorrido:
 
 ```text
-data/don_quijote.txt ──► rag/book.py ──► rag/chunking.py ──► rag/embeddings.py ──► MongoDB
-   (Gutenberg)          126 capítulos      fragmentos         un vector por        colección
-                                           ~1200 caracteres   fragmento            quijote.chunks
+data/don_quijote.txt ──► book.chapters ──► book.chunk ──────► embeddings.py ──► MongoDB
+   (Gutenberg)           126 capítulos      fragmentos          un vector por     colección
+                                            ~1200 caracteres    fragmento         quijote.chunks
 ```
 
-## 1. Parseo (`rag/book.py`)
+## 1. Parseo (`book.chapters`)
 
 El texto de Project Gutenberg trae una licencia al inicio y al final, preliminares (tasa, prólogos,
 poemas) y los capítulos. El parser se queda solo con los capítulos (`Capítulo VIII. Del buen suceso…`),
 convierte el número romano y detecta el segundo volumen (1615) cuando la numeración vuelve a empezar.
 
-## 2. Chunking (`rag/chunking.py`)
+## 2. Chunking (`book.chunk`)
 
 Un capítulo completo no cabe en la ventana del modelo, y aunque cupiera un solo vector diluiría muchos
 temas a la vez. Hay que partirlo. La estrategia de este proyecto es:
@@ -25,12 +25,12 @@ temas a la vez. Hay que partirlo. La estrategia de este proyecto es:
   completa en al menos uno de los dos.
 
 Es la decisión que más afecta a la calidad de un RAG: con fragmentos muy chicos se pierde contexto y
-con fragmentos muy grandes el vector se vuelve genérico. Prueba con `--max-chars 600` o `2000`
-(usando `--reset`) y compara las búsquedas.
+con fragmentos muy grandes el vector se vuelve genérico. Prueba cambiando `book.documents(max_chars=...)` en el seed a 600 o 2000
+y compara con `lessons/07_evaluate.py`.
 
 ## 3. El documento
 
-Cada fragmento queda así en MongoDB (`mongosh/01-explorar.js`):
+Cada fragmento queda así en MongoDB (`lessons/02_documents.py`):
 
 ```js
 {
@@ -49,11 +49,11 @@ El texto, sus metadatos y su vector viven **en el mismo documento**. Esa es la g
 como base vectorial: no hay que sincronizar una base vectorial aparte con la base de datos
 "de verdad", y los metadatos sirven como filtro en la misma consulta.
 
-## 4. Carga idempotente
+## 4. Recarga rápida
 
-La ingesta usa `bulk_write` con `ReplaceOne(..., upsert=True)` por `_id`, y antes consulta qué
-fragmentos ya tienen `embedding`. Si se corta a la mitad, al volver a ejecutarla continúa donde iba.
-`--reset` borra la colección y empieza de cero.
+El seed borra la base y vuelve a insertar todo con `insert_many`, pero antes lee los vectores que ya
+existen: si el `_id`, el texto y el modelo (`model`) coinciden, reutiliza el vector en vez de
+recalcularlo. Por eso la primera carga tarda 2-3 minutos y las siguientes, segundos.
 
 ## Para pensar
 

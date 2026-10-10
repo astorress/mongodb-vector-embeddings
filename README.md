@@ -1,13 +1,14 @@
 # MongoDB Vector Search
 
 Proyecto para entender la **búsqueda semántica con MongoDB**: convertir texto en **embeddings**, guardarlos junto
-a los documentos, indexarlos y buscarlos por significado con `$vectorSearch`. También incluye búsqueda de texto
-completo, búsqueda híbrida y un **RAG** que responde preguntas sobre un libro real, *Don Quijote de la Mancha*
-(Project Gutenberg, dominio público), usando una aplicación en Python (`pymongo` + `sentence-transformers`).
+a los documentos, indexarlos y buscarlos por significado con `$vectorSearch`. Incluye una aplicación en Python
+(`pymongo` + `sentence-transformers`) que carga un libro real, *Don Quijote de la Mancha* (Project Gutenberg,
+dominio público), en una sola colección (`chunks`), lo busca por significado, por palabras y de forma híbrida, y
+responde preguntas sobre él con un **RAG**.
 
 ![Arquitectura del proyecto](docs/architecture.png)
 
-> Diagrama editable: [`docs/architecture.drawio`](docs/architecture.drawio). En verde, la ingesta del libro; en azul,
+> Diagrama editable: [`docs/architecture.drawio`](docs/architecture.drawio). En verde, la carga del libro; en azul,
 > las consultas.
 
 ## 1. Conceptos de MongoDB
@@ -20,9 +21,10 @@ números: eso permite guardar el **vector** de un texto en el mismo documento qu
 
 | Concepto | Qué es | En este proyecto |
 | --- | --- | --- |
+| **Clúster** | Conjunto de procesos MongoDB que trabajan como una sola base de datos. | Un `mongod` + un `mongot` |
 | **Database** | Contenedor lógico de colecciones. | `quijote` |
 | **Collection** | Grupo de documentos, equivalente a una tabla. | `chunks`: los fragmentos del libro |
-| **Document** | Un registro en formato BSON (JSON binario), de hasta 16 MB. Todo documento tiene un `_id` único. | Un fragmento de ~1200 caracteres |
+| **Document** | Un registro en formato BSON (JSON binario), de hasta 16 MB. Todo documento tiene un `_id` único. | Un fragmento de ~1200 caracteres con su vector |
 | **Field** | Un par nombre-valor dentro del documento. | `text`, `chapter`, `embedding` |
 | **Índice** | Estructura ordenada (B-tree) que evita recorrer toda la colección en una búsqueda exacta. | `{volume, chapter, position}` |
 | **Índice de búsqueda** | Índice de Apache Lucene, separado de los normales, para búsquedas vectoriales o de texto completo. | `chunks_vector_index` y `chunks_text_index` |
@@ -38,7 +40,8 @@ Un documento de este proyecto:
   chapter_title: "Del buen suceso que el valeroso don Quijote tuvo en la … aventura de los molinos de viento…",
   position: 0,
   text: "En esto, descubrieron treinta o cuarenta molinos de viento que hay en aquel campo…",
-  embedding: [0.0213, -0.1131, 0.0874, …]   // 384 números: el significado de `text`
+  embedding: [0.0213, -0.1131, 0.0874, …],  // 384 números: el significado de `text`
+  model: "intfloat/multilingual-e5-small"   // el modelo que generó el vector
 }
 ```
 
@@ -46,10 +49,11 @@ Un documento de este proyecto:
 
 | Programa | Qué hace | Aquí |
 | --- | --- | --- |
-| **`mongod`** | El **servidor de base de datos**: guarda los documentos, ejecuta las consultas y mantiene los índices normales. | `VectorEmbeddingsDatabase` |
-| **`mongot`** | El **motor de búsqueda** (Apache Lucene): mantiene los índices vectoriales y de texto completo y resuelve `$vectorSearch` y `$search`. | `VectorEmbeddingsDatabase`, junto a `mongod` |
-| **`mongosh`** | El **shell interactivo** de MongoDB, en JavaScript: `db.chunks.find()`, `db.chunks.getSearchIndexes()`. | En `VectorEmbeddingsRag` |
-| **Driver (`pymongo`)** | Biblioteca con la que la aplicación habla con MongoDB. | Los scripts `rag.*` |
+| **`mongod`** | El **servidor de base de datos**: guarda los documentos, ejecuta las consultas y mantiene los índices normales. | `MongoVectorSearch` |
+| **`mongot`** | El **motor de búsqueda** (Apache Lucene): mantiene los índices vectoriales y de texto completo y resuelve `$vectorSearch` y `$search`. | `MongoVectorSearch`, junto a `mongod` |
+| **`mongosh`** | El **shell interactivo** de MongoDB, en JavaScript: `db.chunks.find()`, `db.chunks.getSearchIndexes()`. | En `MongoVectorLab` |
+| **Driver (`pymongo`)** | Biblioteca con la que la aplicación habla con MongoDB. | Las lecciones |
+| `mongodump` / `mongorestore` / `mongostat` / `mongotop` | Respaldo, restauración y monitoreo. | En `MongoVectorLab` |
 
 ### Cómo funciona la base de datos por dentro
 
@@ -76,8 +80,10 @@ La búsqueda vectorial la resuelven **dos procesos** que trabajan juntos:
   existe en un replica set. Por eso `mongod` corre como **replica set de un solo nodo**: tiene oplog, pero sigue
   siendo una sola base de datos, sin copias ni sharding.
 - **`mongot` no guarda tus datos.** Si se borran sus índices, los reconstruye leyendo `mongod`.
+- **WiredTiger, journal e índices B-tree** funcionan igual que en cualquier `mongod`: sin índice, una consulta
+  revisa todos los documentos (`COLLSCAN`); con índice, solo los que coinciden (`IXSCAN`).
 
-## 2. Búsqueda semántica y vector embeddings
+## 2. Búsqueda semántica
 
 ### Embeddings
 
@@ -95,7 +101,7 @@ entrenado para esto pone cerca textos que dicen lo mismo con otras palabras, aun
 | **Modelo de embeddings** | Red neuronal que convierte texto en un vector. La pregunta y los documentos **deben** pasar por el mismo modelo, o sus vectores no son comparables. | `intfloat/multilingual-e5-small`, en CPU, sin API key |
 | **Dimensiones** | Cuántos números tiene cada vector. El índice debe declarar exactamente la misma cantidad. | 384 |
 | **Similitud** | Cómo se mide la cercanía entre dos vectores: `cosine` (el ángulo), `dotProduct` (producto punto, exige vectores normalizados) o `euclidean` (distancia). | `cosine`, con vectores normalizados |
-| **Prefijos** | Los modelos E5 esperan `query: ` delante de las preguntas y `passage: ` delante de los textos indexados. | `rag/embeddings.py` |
+| **Prefijos** | Los modelos E5 esperan `query: ` delante de las preguntas y `passage: ` delante de los textos indexados. | `src/lab/embeddings.py` |
 | **Ventana** | Máximo de tokens que el modelo lee; lo que sobra se descarta sin aviso. | 512 tokens |
 
 ### Chunking: partir el texto
@@ -189,48 +195,45 @@ puede usarlo. Aquí el paso 3 usa Claude y es opcional (requiere API key).
 | --- | --- | --- |
 | **Modelo de embeddings** | Tiene que entender el idioma y el tipo de texto. Más dimensiones no siempre es mejor. | `multilingual-e5-small` (384). `multilingual-e5-base` (768) no acertó más y tardó 2,6 veces más en procesar el libro. |
 | **Tamaño del fragmento** | Muy chico pierde contexto; muy grande diluye el significado. | ~1200 caracteres con solapamiento de un párrafo |
-| **Tipo de búsqueda** | La híbrida suele ganar cuando las preguntas mezclan ideas y nombres propios. | Híbrida: 7/10 aciertos en primer lugar, contra 5/10 de la semántica |
+| **Tipo de búsqueda** | La híbrida suele ganar cuando las preguntas mezclan ideas y nombres propios. | Híbrida: 8/10 aciertos en primer lugar, contra 6/10 de la semántica y 6/10 de la de texto |
 | **`numCandidates`** | Más candidatos mejora el *recall* a cambio de velocidad. | 20 × `limit` |
 | **Metadatos para filtrar** | Permiten acotar la búsqueda (por volumen, capítulo, fecha, cliente…) dentro del mismo índice. | `volume` y `chapter` |
 
-Cada decisión se puede medir con `python -m rag.evaluate` (ver [lecciones](#5-lecciones)).
+Cada decisión se mide con la lección `07_evaluate.py`.
 
 ## 3. Cómo está armado el proyecto
 
-| Contenedor | Proceso | Puerto interno | Puerto en el host | Rol |
+| Contenedor | Imagen / proceso | Puerto interno | Puerto en el host | Rol |
 | --- | --- | --- | --- | --- |
-| `VectorEmbeddingsDatabase` | `mongod` + `mongot` (imagen `mongodb/mongodb-atlas-local`, MongoDB 8.3) | 27017 | 27027 | La base de datos vectorial |
-| `VectorEmbeddingsRag` | Python 3.13 · pymongo · sentence-transformers · mongosh | — | — | Donde se ejecutan la ingesta, las búsquedas y las lecciones |
+| `MongoVectorSearch` (`mongodb`) | `mongodb/mongodb-atlas-local` (MongoDB 8.3) · `mongod` + `mongot` | 27017 | 27027 | La base de datos vectorial |
+| `MongoVectorLab` | Python 3.13 · pymongo · sentence-transformers · mongosh · JupyterLab | 8888 | 8888 | Donde se ejecutan las lecciones y el sandbox |
 
 **Arranque:**
 
-1. `.docker/initialize.sh` genera `.envs/mongo.env` con un usuario `root` y una contraseña aleatoria.
-2. Se inicia `VectorEmbeddingsDatabase`: crea el usuario, arranca `mongod` como replica set de un nodo y luego
-   `mongot`.
-3. Cuando la base está sana, se inicia `VectorEmbeddingsRag`.
-4. `python -m rag.ingest` (una sola vez) carga el libro y crea los índices.
+1. Se inicia `MongoVectorSearch`: la imagen arranca `mongod` como replica set de un nodo y luego `mongot`. No hace
+   falta un job de inicialización.
+2. `MongoVectorLab` espera a que `mongod` sea PRIMARY y descarga el modelo de embeddings (una sola vez).
+3. `python lessons/00_seed.py` carga el libro y crea los índices.
 
-Los datos, los índices de `mongot` y el modelo de embeddings descargado se guardan en volúmenes, así que
-sobreviven a reinicios.
+Los datos, los índices de `mongot` y el modelo descargado se guardan en volúmenes, así que sobreviven a los
+reinicios.
 
-La aplicación se conecta con `MONGODB_URI` (en `.envs/mongo.env`):
-`mongodb://root:<contraseña>@vector_embeddings_database:27017/?directConnection=true&authSource=admin` dentro de
-Docker, y con el mismo usuario en `localhost:27027` desde el host.
+La aplicación se conecta con: `mongodb://mongodb:27017/?directConnection=true`.
 
 ```text
 .devcontainer.json            # Dev Container de VS Code
 .docker/
-  Dockerfile                  # img-base (Python + Node + mongosh) -> img-rag (torch CPU + requirements)
-  docker-compose.yml          # VectorEmbeddingsDatabase y VectorEmbeddingsRag
-  initialize.sh               # Genera .envs/mongo.env
-  entrypoint.sh               # Descarga el modelo de embeddings (devcontainer)
-.envs/mongo.env               # MONGODB_URI, credenciales y modelo (generado, no se versiona)
+  Dockerfile                  # img-base (Python + mongosh) -> img-lab (torch CPU)
+  docker-compose.yml          # Contenedor MongoVectorLab
+  vector-search.yml           # mongod + mongot (mongodb-atlas-local)
+  entrypoint.sh               # Instala requirements, espera a mongod y descarga el modelo
+.envs/mongo.env               # MONGO_URI, MONGO_DB y EMBEDDING_MODEL
 data/don_quijote.txt          # El libro (Project Gutenberg #2000)
 docs/architecture.drawio      # Diagrama
-src/rag/                      # embeddings, book, chunking, indexes, ingest, search, ask, evaluate
-mongosh/                      # Scripts 01-05 para la shell
-lessons/                      # Teoría 01-06
-tests/                        # Parser y chunking
+docs/teoria/                  # Teoría de cada tema (01-06), para leer junto a las lecciones
+src/lab/                      # Cliente, funciones para imprimir, libro + chunking, embeddings y búsqueda
+lessons/                      # Lecciones 00-07
+notebooks/sandbox.ipynb       # Sandbox para experimentar con todo lo anterior
 ```
 
 ## 4. Puesta en marcha
@@ -240,73 +243,97 @@ tests/                        # Parser y chunking
 **Con la terminal**:
 
 ```bash
-.docker/initialize.sh                                        # solo la primera vez
-docker compose -f .docker/docker-compose.yml up -d --build
-docker exec -it VectorEmbeddingsRag bash                     # entrar al contenedor
+cd .docker
+docker compose -f docker-compose.yml -f vector-search.yml up -d --build
+docker exec MongoVectorLab .docker/entrypoint.sh        # solo la primera vez
+docker exec -it MongoVectorLab bash                     # entrar al contenedor
 ```
 
 Dentro del contenedor (`/app`):
 
 ```bash
-python -m rag.ingest           # siempre primero (2-3 min la primera vez: descarga el modelo y embebe 2424 fragmentos)
-python -m rag.search "don Quijote pelea contra gigantes"
-mongosh "$MONGODB_URI"         # shell interactivo
+python lessons/00_seed.py      # siempre primero (2-3 min la primera vez: calcula 2424 embeddings)
+python lessons/01_embeddings.py # y así con las demás, en orden
+mongosh "$MONGO_URI"           # shell interactivo
 ```
 
-Para que `rag.ask` genere respuestas con Claude, crea `.envs/anthropic.env` con `ANTHROPIC_API_KEY=...` y vuelve a
-ejecutar el `docker compose ... up -d`. Sin API key, `rag.ask` recupera los fragmentos y muestra el prompt.
+Para que la lección 06 genere respuestas con Claude, crea `.envs/anthropic.env` con `ANTHROPIC_API_KEY=...` y
+vuelve a ejecutar el `docker compose ... up -d`. Sin API key, la lección recupera los fragmentos y muestra el prompt.
+
+Apagar (`stop`) o borrar todo, incluidos los datos y el modelo descargado (`down -v`):
+
+```bash
+cd .docker
+docker compose -f docker-compose.yml -f vector-search.yml down -v
+```
 
 ### Abrir la base en MongoDB Compass
 
-**New Connection** → pega la URI → **Save & Connect**. La contraseña está en `.envs/mongo.env`:
+**New Connection** → pega la URI → **Save & Connect**:
 
 ```text
-mongodb://root:<MONGODB_INITDB_ROOT_PASSWORD>@localhost:27027/?directConnection=true&authSource=admin
+mongodb://localhost:27027/?directConnection=true
 ```
 
-- **`directConnection=true` es necesario**: sin él, Compass le pregunta a `mongod` por su replica set, recibe el
-  nombre interno del contenedor (`mongodb:27017`), que tu equipo no conoce, y la conexión falla.
-- En `quijote.chunks` ves los 2424 fragmentos con su vector. En la pestaña **Indexes → Search Indexes** aparecen
-  los dos índices de búsqueda, y desde **Aggregations** puedes probar `$search` directamente.
+`directConnection=true` es necesario. Sin él, Compass le pregunta a `mongod` por su replica set, recibe el nombre
+interno del contenedor (`mongodb:27017`), que tu equipo no conoce, y la conexión falla.
 
-Borrar todo, incluidos los datos y el modelo descargado:
+Qué puedes comprobar:
 
-```bash
-docker compose -f .docker/docker-compose.yml down -v
-```
+- En `quijote.chunks` están los 2424 fragmentos con su vector (el campo `embedding`, un array de 384 números).
+- En **Indexes → Search Indexes** aparecen los dos índices de búsqueda con su estado. Mientras corre la lección 03
+  aparece y desaparece un tercero, `chunks_vector_int8`.
+- Desde **Aggregations** puedes probar `$search` y `$vectorSearch` (con el `embedding` de otro documento como
+  `queryVector`).
 
 ## 5. Lecciones
 
-Todo se ejecuta dentro de `VectorEmbeddingsRag`. La teoría de cada tema está en [`lessons/`](lessons).
-
-| Comando | Qué hace | Qué observar |
+| Lección | Qué hace | Qué observar |
 | --- | --- | --- |
-| `python -m rag.ingest` | Parsea el libro en 126 capítulos, lo parte en 2424 fragmentos, calcula los embeddings y los guarda con `bulk_write` (upsert por `_id`). Crea los dos índices de búsqueda y espera a que estén listos. | Los índices pasan de `PENDING` a listos mientras `mongot` los construye. Si la carga se corta, al relanzarla solo procesa lo que falta. `--reset` empieza de cero y `--max-chars` cambia el tamaño del fragmento. |
-| `python -m rag.search "<consulta>"` | Búsqueda **semántica** con `$vectorSearch`. | Encuentra la aventura de los molinos aunque preguntes por "gigantes" sin decir "molinos". |
-| `python -m rag.search "<consulta>" --mode text` | Búsqueda de **texto completo** con `$search`. | Gana cuando buscas un nombre propio (`"Rocinante"`, `"Clavileño"`). Los puntajes son BM25, en otra escala. |
-| `python -m rag.search "<consulta>" --mode hybrid` | Búsqueda **híbrida** con `$rankFusion`. | Los fragmentos que aparecen en las dos búsquedas suben al principio. |
-| `python -m rag.search "<consulta>" --volume 2 --chapter 45 -k 3` | Pre-filtros por metadatos dentro de `$vectorSearch`. | Solo devuelve fragmentos de ese volumen o capítulo, sin perder resultados. |
-| `python -m rag.ask "<pregunta>"` | **RAG**: recupera fragmentos (híbrida), arma el prompt y, si hay API key, Claude responde citándolos. `--no-llm` se detiene en el prompt; `--show-prompt` lo muestra siempre. | Cada fragmento llega numerado y con su referencia (volumen, capítulo), para que la respuesta pueda citarlos. |
-| `python -m rag.evaluate` | Hace 10 preguntas cuya respuesta está en un capítulo conocido y mide en qué posición aparece con cada modo. | *hit@1* (sale primero) y *hit@5* (entre los 5 primeros). Vuelve a correrlo cada vez que cambies el modelo, el chunking o la búsqueda. |
-| `mongosh "$MONGODB_URI" --file mongosh/01-explorar.js` | Cuenta los fragmentos por volumen, muestra un documento sin su vector y cuánto pesa. | El vector pesa más que el texto: ~5 KB contra ~1 KB. |
-| `mongosh "$MONGODB_URI" --file mongosh/02-indices.js` | Lista los índices de búsqueda con su estado y definición. | `status: READY` y `queryable: true`. |
-| `mongosh "$MONGODB_URI" --file mongosh/03-pasajes-parecidos.js` | "Más como éste": usa el vector de un fragmento guardado (los molinos) como consulta, con un pre-filtro que excluye su propio capítulo. | No hace falta un modelo para buscar si ya tienes un vector. Así funcionan los recomendadores. |
-| `mongosh "$MONGODB_URI" --file mongosh/04-texto-completo.js` | `$search` con frase exacta y resaltado (`"ínsula Barataria"`), y en qué capítulos aparece más "Dulcinea". | `searchHighlights` marca las palabras encontradas dentro del fragmento. |
-| `mongosh "$MONGODB_URI" --file mongosh/05-consistencia-eventual.js` | Inserta un documento y lo busca con `$search` hasta que aparece. | `find` lo ve al instante; `mongot`, un momento después (consistencia eventual). |
-| `pytest` | Prueba el parser (126 capítulos, 2 volúmenes) y el chunking (tamaño, solapamiento). | No necesita la base de datos. |
+| `00_seed.py` | Parsea el libro en 126 capítulos, lo parte en 2424 fragmentos, calcula sus embeddings, borra la base `quijote`, inserta los documentos con `insert_many` y crea el índice normal y los dos de búsqueda. | Los índices de búsqueda pasan de `PENDING` a listos mientras `mongot` los construye. Al repetir el seed reutiliza los vectores que ya calculó con el mismo modelo y el mismo texto: tarda segundos. |
+| `01_embeddings.py` | Convierte frases en vectores y compara su similitud con una pregunta; compara con y sin prefijos E5; embebe un capítulo completo. | Los textos con la misma idea quedan primeros aunque no compartan palabras. El capítulo completo (4596 tokens) da el mismo vector que sus primeros 3000 caracteres: el modelo descarta lo que pasa de 512 tokens. |
+| `02_documents.py` | **Read** con proyección sin el vector; el solapamiento entre fragmentos; cuánto pesa el vector (`$bsonSize`) y cuánto ocuparía como `binData` float32, int8 o bit; **Create**, **Update** y **Delete** de un documento con su vector. | El vector pesa ~5 veces más que el texto. Si cambias el texto sin recalcular el vector, el vector deja de describirlo. |
+| `03_search_indexes.py` | Índices normales vs de búsqueda; definición del índice vectorial; crea un índice cuantizado (`quantization: scalar`) y lo ve construirse; inserta un documento y mide cuándo lo ve `mongot`. | `PENDING` → `BUILDING` → `READY`. `find` ve el documento al instante; `$search`, alrededor de un segundo después (consistencia eventual). |
+| `04_vector_search.py` | `$vectorSearch` con una pregunta; exacta (ENN) vs aproximada (ANN) con distintos `numCandidates`; pre-filtros; pre-filtro vs `$match` posterior; `$group` después de buscar; "más como éste" con un vector guardado. | Con pocos candidatos el *recall* puede bajar. El `$match` posterior deja 1 resultado; el `filter`, 5. Acepta otra consulta: `python lessons/04_vector_search.py "…"`. |
+| `05_hybrid_search.py` | `$search` con BM25, frase exacta con resaltado y conteo por capítulo; top 3 de semántica, texto e híbrida para dos preguntas; `$rankFusion` con `scoreDetails`. | Ninguna búsqueda acierta siempre; los fragmentos que aparecen en las dos listas suben en la híbrida. `scoreDetails` muestra la posición que tuvo cada fragmento en cada búsqueda. |
+| `06_rag.py` | **RAG**: recupera 5 fragmentos (híbrida), arma el prompt numerado y, si hay API key, Claude responde citándolos. | Cada fragmento llega con su referencia (volumen, capítulo), para que la respuesta pueda citarlos. Acepta otra pregunta como argumento. |
+| `07_evaluate.py` | Hace 10 preguntas cuya respuesta está en un capítulo conocido y mide en qué posición aparece con cada búsqueda. | *hit@1* y *hit@5* por búsqueda, y su latencia. Vuelve a correrla cada vez que cambies el modelo, el chunking o la búsqueda. |
 
-| Teoría | Tema |
-| --- | --- |
-| [01](lessons/01-embeddings.md) | Qué es un embedding, similitud y el modelo |
-| [02](lessons/02-ingesta-y-chunking.md) | Ingesta, chunking y el documento |
-| [03](lessons/03-indices-de-busqueda.md) | Índices de búsqueda y `mongot` |
-| [04](lessons/04-busqueda-semantica.md) | `$vectorSearch`, filtros y "más como éste" |
-| [05](lessons/05-busqueda-hibrida.md) | Texto completo, `$rankFusion` y RRF |
-| [06](lessons/06-rag.md) | RAG y evaluación |
+Para volver al estado inicial: `python lessons/00_seed.py`.
+
+La teoría de cada tema, con más detalle que este README, está en [`docs/teoria/`](docs/teoria):
+
+| Teoría | Tema | Lecciones |
+| --- | --- | --- |
+| [01](docs/teoria/01-embeddings.md) | Qué es un embedding, similitud y el modelo | `01` |
+| [02](docs/teoria/02-ingesta-y-chunking.md) | Parseo, chunking y el documento | `00`, `02` |
+| [03](docs/teoria/03-indices-de-busqueda.md) | Índices de búsqueda y `mongot` | `03` |
+| [04](docs/teoria/04-busqueda-semantica.md) | `$vectorSearch`, filtros y "más como éste" | `04` |
+| [05](docs/teoria/05-busqueda-hibrida.md) | Texto completo, `$rankFusion` y RRF | `05` |
+| [06](docs/teoria/06-rag.md) | RAG y evaluación | `06`, `07` |
+
+### Sandbox
+
+[`notebooks/sandbox.ipynb`](notebooks/sandbox.ipynb) reúne todo en un solo lugar para experimentar: conexión y
+estado de la base, funciones listas (`buscar`, `leer`, `similitud`, `comparar`), similitud entre tus frases,
+`$vectorSearch` armado a mano, operadores de `$search`, `$rankFusion` con pesos, un pipeline libre, un mapa 2D de
+los embeddings, una colección `sandbox` con **tus propios textos** y su índice, y el RAG. Las celdas marcadas
+**Juega aquí** están hechas para cambiarlas.
+
+Necesita el seed cargado. Hay dos formas de abrirlo:
+
+- **VS Code (Dev Container)**: abre el archivo y elige el kernel de Python 3.13 del contenedor. No usa puertos.
+- **Navegador (JupyterLab)**: el contenedor publica el puerto 8888 solo para esto.
+
+  ```bash
+  docker exec -it MongoVectorLab jupyter lab --ip 0.0.0.0 --port 8888 --no-browser --notebook-dir /app
+  ```
+
+  Abre en tu equipo la URL `http://127.0.0.1:8888/lab?token=…` que imprime el comando, y `Ctrl+C` para cerrarlo.
 
 ## 6. Comandos útiles
 
-En `mongosh "$MONGODB_URI"`:
+En `mongosh "$MONGO_URI"`:
 
 ```javascript
 use quijote
@@ -337,23 +364,19 @@ db.chunks.aggregate([
 ])
 ```
 
-Experimento: consistencia eventual. Un documento nuevo está en `mongod` al instante, pero `mongot` tarda un
-momento en indexarlo:
+Experimento desde el host:
 
 ```bash
-docker exec VectorEmbeddingsRag bash -c 'mongosh "$MONGODB_URI" --quiet --file mongosh/05-consistencia-eventual.js'
-#   -> En mongod (find):            1
-#   -> En mongot, recién insertado: 0
-#   -> En mongot, 250 ms después:   1
+# Reiniciar la base: los índices de mongot están en un volumen y no hay que reconstruirlos
+docker restart MongoVectorSearch
+docker exec MongoVectorLab bash -c 'mongosh "$MONGO_URI" --quiet --eval "db.getSiblingDB(\"quijote\").chunks.getSearchIndexes().map(i => i.name + \" \" + i.status)"'
+#   -> [ 'chunks_vector_index READY', 'chunks_text_index READY' ]   (tras unos segundos)
 ```
-
-El script inserta un documento, lo busca con `$search` hasta que aparece y luego lo borra.
 
 ## Notas
 
-- **Credenciales locales**: la base tiene autenticación (usuario `root` con contraseña aleatoria en
-  `.envs/mongo.env`, que no se versiona) y se publica solo en `localhost:27027`. Es para aprender en local; en
-  producción se usan usuarios con roles mínimos y TLS.
+- **Sin autenticación**: el proyecto es solo para aprendizaje local; la base se publica en `localhost:27027`
+  únicamente para abrirla con Compass. En producción se usan usuarios con roles mínimos y TLS.
 - **Imagen `mongodb-atlas-local`**: trae `mongod` y `mongot` en un solo contenedor y es la forma oficial de probar
   Vector Search en local. Se usa la etiqueta `preview` (MongoDB 8.3), fijada por digest para que no cambie sola.
   MongoDB 9 Community también tiene Vector Search, pero requiere `mongot` en un contenedor aparte.

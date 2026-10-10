@@ -3,14 +3,14 @@
 ## `$search`: palabras, no significado
 
 ```bash
-python -m rag.search "Rocinante" --mode text
+python lessons/05_hybrid_search.py
 ```
 
 `$search` busca **términos** en el índice Lucene (`chunks_text_index`) y puntúa con BM25: pesa más un
 término raro ("Clavileño") que uno común ("caballero"), y más si aparece varias veces en un fragmento
 corto. Además de `text` ofrece operadores como `phrase` (frase exacta), `fuzzy` (tolera errores de
 tipeo), `compound` (`must`, `should`, `filter`, `mustNot`), `highlight` y facetas. Están en
-`mongosh/04-texto-completo.js`.
+`lessons/05_hybrid_search.py`.
 
 | | Semántica (`$vectorSearch`) | Texto completo (`$search`) |
 | --- | --- | --- |
@@ -21,7 +21,7 @@ tipeo), `compound` (`must`, `should`, `filter`, `mustNot`), `highlight` y faceta
 ## Híbrida: lo mejor de ambas
 
 ```bash
-python -m rag.search "¿Qué le pasó a Sancho en la ínsula Barataria?" --mode hybrid
+python lessons/05_hybrid_search.py "¿Qué le pasó a Sancho en la ínsula Barataria?"
 ```
 
 Los scores de cada búsqueda no se pueden comparar (uno es un coseno y el otro BM25), así que no se
@@ -38,7 +38,7 @@ uno que solo sale primero en una de las dos.
 ### `$rankFusion`: RRF dentro del servidor
 
 Desde MongoDB 8.1 no hace falta programar la fusión: la etapa `$rankFusion` recibe varios pipelines,
-los ejecuta y fusiona sus rankings con RRF. Es lo que hace `hybrid_search` (`rag/search.py`):
+los ejecuta y fusiona sus rankings con RRF. Es lo que hace `hybrid` (`lab/search.py`):
 
 ```python
 {"$rankFusion": {"input": {"pipelines": {
@@ -62,5 +62,7 @@ los ejecuta y fusiona sus rankings con RRF. Es lo que hace `hybrid_search` (`rag
 Compara los tres modos con preguntas que tengan nombres propios y con preguntas que no los tengan:
 
 ```bash
-for m in semantic text hybrid; do python -m rag.search "¿Quién es el Caballero de la Blanca Luna?" --mode $m -k 3; done
+python -c 'from lab.client import get_db; from lab.search import SEARCHES, reference
+for mode, search in SEARCHES.items():
+    print(mode, [reference(d) for d in search(get_db().chunks, "¿Quién es el Caballero de la Blanca Luna?", k=3)])'
 ```

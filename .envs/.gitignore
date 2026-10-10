@@ -1,2 +1,2 @@
-*
-!.gitignore
+# mongo.env is versioned (no secrets); anthropic.env holds the API key
+anthropic.env

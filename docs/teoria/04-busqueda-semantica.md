@@ -1,13 +1,13 @@
 # 4. Búsqueda semántica con `$vectorSearch`
 
 ```bash
-python -m rag.search "don Quijote pelea contra gigantes que en realidad son molinos"
+python lessons/04_vector_search.py "don Quijote confunde unos molinos con gigantes y los ataca"
 ```
 
 ## La etapa
 
 `$vectorSearch` es una etapa de agregación y **tiene que ser la primera** del pipeline
-(`rag/search.py`):
+(`lab/search.py`):
 
 ```python
 [
@@ -36,8 +36,8 @@ python -m rag.search "don Quijote pelea contra gigantes que en realidad son moli
   haría un `$match` posterior.
 
 ```bash
-python -m rag.search "Sancho gobierna una isla" --volume 2
-python -m rag.search "una batalla" --volume 1 --chapter 18
+python -c 'from lab.client import get_db; from lab.search import semantic, reference
+print([reference(d) for d in semantic(get_db().chunks, "Sancho gobierna una isla", filter={"volume": 2})])'
 ```
 
 ## Después de `$vectorSearch`, agregación normal
@@ -46,8 +46,8 @@ Como el resultado es un pipeline normal, se puede seguir con `$group`, `$lookup`
 ejemplo, ¿en qué capítulos se habla más de encantadores?
 
 ```python
-from rag.db import get_chunks
-from rag.embeddings import embed_query
+from lab.client import get_db
+from lab.embeddings import embed_query
 
 pipeline = [
     {"$vectorSearch": {"index": "chunks_vector_index", "path": "embedding",
@@ -58,7 +58,7 @@ pipeline = [
     {"$sort": {"fragmentos": -1, "score": -1}},
     {"$limit": 5},
 ]
-for row in get_chunks().aggregate(pipeline):
+for row in get_db().chunks.aggregate(pipeline):
     print(row)
 ```
 
@@ -66,11 +66,11 @@ for row in get_chunks().aggregate(pipeline):
 
 No siempre hace falta embeber una pregunta: se puede usar como `queryVector` el embedding de un
 documento que ya existe. Así funcionan los sistemas de recomendación. Lo hace
-`mongosh/03-pasajes-parecidos.js`, sin Python.
+el último paso de `lessons/04_vector_search.py`, y en mongosh está en la sección "Comandos útiles" del README.
 
 ## Limitaciones
 
 La búsqueda semántica entiende sinónimos y paráfrasis, pero le cuestan los **nombres propios y
 términos exactos** ("Rocinante", "Barataria", "Clavileño"): para el modelo son palabras raras y su
 vector es poco preciso. Para eso está la búsqueda de texto completo, y por eso existe la búsqueda
-híbrida (lección 5).
+híbrida ([05](05-busqueda-hibrida.md)).

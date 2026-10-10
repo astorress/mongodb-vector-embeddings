@@ -14,7 +14,7 @@ espacio, aunque no compartan palabras:
 
 La cercanía se mide con la **similitud coseno** (el ángulo entre dos vectores): 1 significa misma
 dirección, 0 que no tienen relación. Si los vectores están **normalizados** (largo 1), el coseno es
-simplemente el producto punto, que es muy barato de calcular. Por eso `rag/embeddings.py` usa
+simplemente el producto punto, que es muy barato de calcular. Por eso `src/lab/embeddings.py` usa
 `normalize_embeddings=True`.
 
 MongoDB ofrece tres métricas en el índice vectorial: `cosine`, `dotProduct` (más rápida, exige vectores
@@ -24,7 +24,7 @@ normalizados) y `euclidean`.
 
 El modelo se define en `EMBEDDING_MODEL` (`.envs/mongo.env`) y corre **local, en CPU**, con
 `sentence-transformers`: no requiere API key ni cuesta dinero. La primera vez se descarga de Hugging
-Face y queda en el volumen `vector-embeddings-models`.
+Face y queda en el volumen `mongodb-vector-search-models`.
 
 Detalles que importan:
 
@@ -35,14 +35,14 @@ Detalles que importan:
 - **Prefijos E5**: los modelos de la familia E5 esperan `query: ` delante de las preguntas y
   `passage: ` delante de los textos indexados. Si se omiten, la calidad cae.
 - **Ventana**: los modelos tienen un máximo de tokens (512 en E5). Lo que pase de ahí se trunca en
-  silencio. Por eso el libro se parte en fragmentos (lección 2).
+  silencio. Por eso el libro se parte en fragmentos ([02](02-ingesta-y-chunking.md)).
 
 ## Pruébalo
 
 ```bash
 python - <<'EOF'
 import numpy as np
-from rag.embeddings import embed_query, embed_passages
+from lab.embeddings import embed_query, embed_passages
 
 frases = ["arremetió contra los molinos de viento", "Sancho cena queso y pan"]
 pregunta = np.array(embed_query("don Quijote ataca a unos gigantes"))

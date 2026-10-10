@@ -1,0 +1,29 @@
+# Vector Search: one container with two processes.
+#   mongod -> the database: stores the documents (with their vectors) and the normal B-tree indexes
+#   mongot -> the search engine (Apache Lucene): keeps the vector and full-text indexes and answers
+#             $vectorSearch / $search; it follows mongod's changes through change streams
+#
+# mongot reads change streams, which need an oplog, so the image starts mongod as a single-member replica set
+# named after the hostname. Keep the hostname fixed so the data survives container recreations.
+# No init job is needed: the image initiates the replica set and starts mongot by itself.
+# Published on host port 27027 only to open it from Compass with directConnection=true.
+
+services:
+
+  mongodb:
+    container_name: 'MongoVectorSearch'
+    # MongoDB 8.3 with Vector Search ("preview" is the newest atlas-local build), pinned by digest
+    image: mongodb/mongodb-atlas-local:preview@sha256:6782794e418af132694449a757a03f5ad3eac0761f1448df909ade23634410e2
+    hostname: mongodb
+    restart: unless-stopped
+    ports:
+      - 27027:27017
+    volumes:
+      - mongodb-data:/data/db
+      - mongodb-configdb:/data/configdb
+      - mongot-data:/data/mongot
+
+volumes:
+  mongodb-data:
+  mongodb-configdb:
+  mongot-data:

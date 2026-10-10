@@ -1,31 +1,34 @@
 ######## BASE IMAGE ########
-FROM python:3.13-slim-bookworm AS python-base
-FROM node:24-bookworm-slim AS img-base
+FROM mongo:8.2.12 AS mongo-base
+FROM python:3.13-slim-trixie AS img-base
 
 # Arguments
-ARG USER=vector-embeddings
+ARG USER=mongodb-vector-search
 ARG USER_HOME=/home/$USER
 ARG VOLUME=/app
 ARG SHELL=/bin/bash
 
-COPY --from=python-base /usr/local/ /usr/local/
-RUN ldconfig
 RUN pip3 install --upgrade pip
 
 RUN apt-get update
-RUN npm install -g npm
 
 # Inital OS configuration
 RUN apt-get install -y locales \
     && sed -i 's/^# *\(en_US.UTF-8\)/\1/' /etc/locale.gen \
     && locale-gen
-RUN apt-get install -y sudo lsb-release git curl zip unzip jq less
+RUN apt-get install -y sudo git curl jq less procps
 
-# Install CLI utilities
-RUN npm install -g mongosh@2.13.0
-RUN npm install -g @anthropic-ai/claude-code \
-    && node "$(npm root -g)/@anthropic-ai/claude-code/install.cjs" \
-    && claude --version
+# MongoDB shell and database tools copied from the official image
+COPY --from=mongo-base \
+    /usr/bin/mongosh \
+    /usr/bin/mongodump \
+    /usr/bin/mongorestore \
+    /usr/bin/mongoexport \
+    /usr/bin/mongoimport \
+    /usr/bin/mongostat \
+    /usr/bin/mongotop \
+    /usr/bin/
+RUN mongosh --version
 
 # Set up non root user
 RUN echo "$USER ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
@@ -41,31 +44,19 @@ RUN SNIPPET="export PROMPT_COMMAND='history -a' && export HISTFILE=/commandhisto
     && chown -R $USER /commandhistory \
     && echo $SNIPPET >> "$USER_HOME/.bashrc"
 
-# Let non-root user self-update global npm packages (mongosh, claude-code) at runtime
-RUN chown -R $USER:$USER /usr/local/lib/node_modules /usr/local/bin
 
+######## LAB IMAGE ########
+FROM img-base AS img-lab
 
-######## RAG IMAGE ########
-FROM img-base AS img-rag
-
-ARG USER=vector-embeddings
+ARG USER=mongodb-vector-search
 
 # Install VSCode extensions dependencies
 RUN pip3 install pylint yapf isort
 
-# Install Test utilities
-RUN pip3 install pytest
-
 # CPU-only torch keeps the image small (PyPI's default wheel bundles CUDA on amd64)
 RUN pip3 install torch==2.14.1 --index-url https://download.pytorch.org/whl/cpu
 
-COPY requirements.txt /tmp/requirements.txt
-RUN pip3 install -r /tmp/requirements.txt
-
-# Make /app/src importable (python -m rag.<module>)
-RUN echo "/app/src" > /usr/local/lib/python3.13/site-packages/rag.pth
-
-# Hugging Face models cache, persisted in a named volume
+# Hugging Face models cache (embedding model), persisted in a named volume
 ENV HF_HOME=/cache/huggingface
 RUN mkdir -p $HF_HOME && chown -R $USER:$USER /cache
 

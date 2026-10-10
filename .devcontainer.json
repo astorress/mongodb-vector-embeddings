@@ -1,7 +1,7 @@
 {
-  "name": "mongodb-vector-embeddings",
-  "dockerComposeFile": ".docker/docker-compose.yml",
-  "service": "vector_embeddings_rag",
+  "name": "mongodb-vector-search",
+  "dockerComposeFile": [".docker/docker-compose.yml", ".docker/vector-search.yml"],
+  "service": "mongodb_lab",
   "workspaceFolder": "/app",
   "customizations": {
     "vscode": {
@@ -15,22 +15,23 @@
         "ms-python.isort",
         "ms-python.pylint",
         "ms-python.python",
+        "ms-toolsai.jupyter",
         "yzhang.markdown-all-in-one"
       ],
       "settings": {
+        "editor.formatOnSave": true,
+        "editor.insertSpaces": true,
         "python.defaultInterpreterPath": "/usr/local/bin/python",
         "pylint.interpreter": ["/usr/local/bin/python"],
         "yapf.interpreter": ["/usr/local/bin/python"],
         "[python]": {
-          "editor.formatOnSave": true,
-          "editor.defaultFormatter": "eeyore.yapf",
           "editor.codeActionsOnSave": {
             "source.organizeImports": "explicit"
-          }
+          },
+          "editor.defaultFormatter": "eeyore.yapf"
         }
       }
     }
   },
-  "initializeCommand": "chmod +x .docker/initialize.sh && .docker/initialize.sh",
   "postCreateCommand": "chmod +x .docker/entrypoint.sh && .docker/entrypoint.sh"
 }
