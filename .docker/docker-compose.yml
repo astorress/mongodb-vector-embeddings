@@ -1,0 +1,51 @@
+name: mongodb-vector-embeddings
+
+services:
+
+  vector_embeddings_database:
+    container_name: VectorEmbeddingsDatabase
+    # MongoDB 8.3 with Vector Search built in (mongod + mongot in one container).
+    # "preview" is the newest atlas-local build; pinned by digest so it does not change under us.
+    image: mongodb/mongodb-atlas-local:preview@sha256:6782794e418af132694449a757a03f5ad3eac0761f1448df909ade23634410e2
+    # atlas-local names its internal replica set after the hostname: keep it fixed so the data survives recreations
+    hostname: mongodb
+    env_file:
+      - ../.envs/mongo.env
+    ports:
+      - 27027:27017
+    volumes:
+      - vector-embeddings-db:/data/db
+      - vector-embeddings-configdb:/data/configdb
+      - vector-embeddings-mongot:/data/mongot
+    restart: unless-stopped
+
+  vector_embeddings_rag:
+    container_name: VectorEmbeddingsRag
+    build:
+      context: ..
+      dockerfile: .docker/Dockerfile
+      target: img-rag
+    volumes:
+      - ..:/app
+      - vector-embeddings-bashhistory:/commandhistory
+      - vector-embeddings-models:/cache/huggingface
+    env_file:
+      - ../.envs/mongo.env
+      - path: ../.envs/anthropic.env
+        required: false
+    depends_on:
+      vector_embeddings_database:
+        condition: service_healthy
+    working_dir: /app
+    restart: unless-stopped
+    command:
+      - /bin/sh
+      - -c
+      - sleep infinity
+
+volumes:
+  vector-embeddings-db:
+  vector-embeddings-configdb:
+  vector-embeddings-mongot:
+  vector-embeddings-bashhistory:
+  vector-embeddings-models:

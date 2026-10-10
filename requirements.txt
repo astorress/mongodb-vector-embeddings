@@ -1,0 +1,4 @@
+pymongo==4.18.3
+sentence-transformers==6.1.0
+numpy==2.5.3
+anthropic==1.13.0
